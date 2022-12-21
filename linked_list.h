@@ -2,6 +2,7 @@
 #define QUEUE_H
 
 #include <sys/types.h>
+#include <stdbool.h>
 
 #define MAX_QUEUE_SIZE 512
 
@@ -36,5 +37,7 @@ void *ll_tail_peek(ll *ll);
 
 void ll_entry_destroy(ll *ll, entry *entry);
 void ll_flush(ll *ll);
+
+bool ll_remove(ll *ll, void *data);
 
 #endif

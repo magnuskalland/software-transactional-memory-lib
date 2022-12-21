@@ -9,45 +9,37 @@
 
 void handler_reset(handler *handler, bool preemptive)
 {
-    if (preemptive)
+    for (uint64_t i = 0; i < handler->w_set->size; i++)
     {
-        for (uint64_t i = 0; i < handler->next_wi; i++)
+        if (preemptive)
         {
-            free(handler->w_set[i].src);
+            free(((write_entry *)arrayget(handler->w_set, i))->src);
         }
+        free(arrayget(handler->w_set, i));
     }
+    array_destroy(handler->w_set);
+    array_destroy(handler->r_set);
     free(handler);
 }
 
-inline int handler_add_read(handler *handler, read_entry r)
+inline void handler_add_read(handler *handler, read_entry r)
 {
-    if (unlikely(handler->next_ri == READ_SET_MAX - 1))
-    {
-        fprintf(stderr, "%s(): max read set size exhausted, increase limit\n", __FUNCTION__);
-        traceerror();
-        return -1;
-    }
-
-    handler->r_set[handler->next_ri] = r;
-
-    handler->next_ri += 1;
-    return 0;
+    array_add(&handler->r_set, r);
 }
 
-inline int handler_add_write(handler *handler, void *src, void *dest, uint64_t size, uint64_t id)
+inline int handler_add_write(handler *handler, void *src, void *dest, uint64_t size)
 {
-    if (unlikely(handler->next_wi == WRITE_SET_MAX - 1))
+    write_entry *e = malloc(sizeof(write_entry));
+    if (!e)
     {
-        fprintf(stderr, "%s(): max write set size exhausted, increase limit\n", __FUNCTION__);
-        traceerror();
+        perror("malloc");
         return -1;
     }
 
-    handler->w_set[handler->next_wi].src = src;
-    handler->w_set[handler->next_wi].dest = dest;
-    handler->w_set[handler->next_wi].size = size;
-    handler->w_set[handler->next_wi].id = id;
+    e->size = size;
+    e->src = src;
+    e->dest = dest;
 
-    handler->next_wi += 1;
+    array_add(&handler->w_set, e);
     return 0;
 }

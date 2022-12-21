@@ -7,12 +7,7 @@
 
 inline bool vlock_unlocked_old(vlock *vlock, uint64_t ts)
 {
-    uint64_t snapshot = atomic_load_explicit(vlock, memory_order_relaxed);
-    // printf("Is %ld locked? %s. Version is %ld and timestamp is %ld\n",
-    //        snapshot,
-    //        unlocked(snapshot) ? "No" : "Yes",
-    //        getversion(snapshot),
-    //        ts);
+    uint64_t snapshot = atomic_load(vlock);
     return unlocked(snapshot) && (getversion(snapshot) <= ts);
 }
 
@@ -38,8 +33,7 @@ inline bool vlock_bounded_spinlock_acquire(vlock *vlock)
     for (uint64_t i = 0; i < SPINLOCK_BOUND; i++)
     {
         expected = getversion(_vlock);
-        if (atomic_compare_exchange_strong_explicit(vlock, &expected, desired,
-                                                    memory_order_acquire, memory_order_relaxed))
+        if (atomic_compare_exchange_strong(vlock, &expected, desired))
         {
             return true;
         }

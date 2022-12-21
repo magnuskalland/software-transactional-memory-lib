@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdint.h>
 
 inline static entry *ll_entry_new(void *data)
 {
@@ -105,16 +106,15 @@ inline void ll_entry_destroy(ll *ll, entry *e)
     e->next->prev = e->prev;
 
     ll->length--;
+    free(e->data);
     free(e);
 }
 
 inline int ll_head_push(ll *ll, void *data)
 {
-
     if (!ll || ll_is_full(ll))
     {
         fprintf(stderr, "pushing to an invalid ll at %p\n", (void *)ll);
-        trace();
         return -1;
     }
 
@@ -133,6 +133,7 @@ inline int ll_head_push(ll *ll, void *data)
 
     else
     {
+        entry->next = ll->head;
         ll->head->prev = entry;
         ll->head = entry;
     }
@@ -202,6 +203,7 @@ inline int ll_tail_push(ll *ll, void *data)
 
     else
     {
+        e->prev = ll->tail;
         ll->tail->next = e;
         ll->tail = e;
     }
@@ -263,4 +265,46 @@ inline void ll_flush(ll *ll)
     }
 
     free(ll);
+}
+
+bool ll_remove(ll *ll, void *data)
+{
+    entry *e;
+    e = ll->head;
+    if (!e)
+    {
+        fprintf(stderr, "Failed to remove 0x%016lx because head was NULL\n",
+                (uint64_t)data);
+        return false;
+    }
+    while (e)
+    {
+        if (e->data == data)
+        {
+            break;
+        }
+        e = e->next;
+    }
+    if (!e)
+    {
+        return false;
+    }
+    if (e == ll->head)
+    {
+        ll->head = ll->head->next;
+    }
+    else
+    {
+        e->prev->next = e->next;
+    }
+    if (e == ll->tail)
+    {
+        ll->tail = ll->tail->prev;
+    }
+    else
+    {
+        e->next->prev = e->prev;
+    }
+    ll->length -= 1;
+    return true;
 }

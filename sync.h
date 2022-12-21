@@ -1,8 +1,11 @@
+#ifndef SYNC_H
+#define SYNC_H
+
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
-#define SPINLOCK_BOUND 10000
+#define SPINLOCK_BOUND 100
 
 #define LOCKED true
 #define UNLOCKED false
@@ -23,3 +26,5 @@ void vlock_update(vlock *vlock, uint64_t version);
 typedef atomic_bool lock;
 bool bounded_spinlock_acquire(lock *lock);
 bool lock_release(lock *lock);
+
+#endif
