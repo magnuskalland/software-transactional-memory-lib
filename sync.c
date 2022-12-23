@@ -5,13 +5,17 @@
 
 #include "macros.h"
 
+/**
+ * Inspiration: https://rigtorp.se/spinlock/
+ */
+
 inline bool vlock_unlocked_old(vlock *vlock, uint64_t ts)
 {
     uint64_t snapshot = atomic_load(vlock);
     return unlocked(snapshot) && (getversion(snapshot) <= ts);
 }
 
-inline bool vlock_release(vlock *vlock)
+inline bool vlock_release_explicitly_unlocked(vlock *vlock)
 {
     uint64_t _vlock = atomic_load(vlock);
     uint64_t expected = _vlock | ((uint64_t)1 << 63);
@@ -25,6 +29,14 @@ inline bool vlock_release(vlock *vlock)
     return false;
 }
 
+inline bool vlock_release(vlock *vlock)
+{
+    uint64_t _vlock = atomic_load(vlock);
+    uint64_t desired = getversion(_vlock);
+    atomic_store_explicit(vlock, desired, memory_order_release);
+    return true;
+}
+
 inline bool vlock_bounded_spinlock_acquire(vlock *vlock)
 {
     uint64_t _vlock = atomic_load(vlock);
@@ -33,9 +45,22 @@ inline bool vlock_bounded_spinlock_acquire(vlock *vlock)
     for (uint64_t i = 0; i < SPINLOCK_BOUND; i++)
     {
         expected = getversion(_vlock);
-        if (atomic_compare_exchange_strong(vlock, &expected, desired))
+        // if (atomic_compare_exchange_strong(vlock, &expected, desired))
+        // {
+        //     return true;
+        // }
+
+        if (atomic_compare_exchange_strong_explicit(
+                vlock, &expected, desired,
+                memory_order_acquire,
+                memory_order_acquire))
         {
             return true;
+        }
+
+        if (locked(atomic_load_explicit(vlock, memory_order_relaxed)))
+        {
+            __builtin_ia32_pause();
         }
     }
     return false;

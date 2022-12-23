@@ -364,30 +364,30 @@ bool ro_read(region *region, handler *handler, void const *src, size_t size, voi
         word_index = (offset_src - segment->vaddr) / region->alignment;
 
         /* without ro optimization */
-        // if (!vlock_unlocked_old(&segment->vlocks[word_index], handler->timestamp))
-        // {
-        //     return false;
-        // }
+        if (!vlock_unlocked_old(&segment->vlocks[word_index], handler->timestamp))
+        {
+            return false;
+        }
 
         /* is the word currently being locked by a different transaction?    */
         /* has the word been updated since this transaction started?         */
-        while (!vlock_unlocked_old(&segment->vlocks[word_index], handler->timestamp))
-        {
-            timestamp = atomic_load(&region->clock);
-            if (!ro_validate(region, handler))
-            {
-                // printf("%s(): tx %08ld | abort by read set validation\n", __FUNCTION__, handler->id);
-                return false;
-            }
-            handler->timestamp = timestamp;
-            memcpy(offset_dest, offset_src, region->alignment);
-            if (++attempts == RO_VALIDATE_ATTEMPTS)
-            {
-                // printf("%s(): tx %08ld | abort by exceeded attempts\n", __FUNCTION__, handler->id);
-                return false;
-            }
-        }
-        handler_add_read(handler, &((char *)src)[i * region->alignment]);
+        // while (!vlock_unlocked_old(&segment->vlocks[word_index], handler->timestamp))
+        // {
+        //     timestamp = atomic_load(&region->clock);
+        //     if (!ro_validate(region, handler))
+        //     {
+        //         // printf("%s(): tx %08ld | abort by read set validation\n", __FUNCTION__, handler->id);
+        //         return false;
+        //     }
+        //     handler->timestamp = timestamp;
+        //     memcpy(offset_dest, offset_src, region->alignment);
+        //     if (++attempts == RO_VALIDATE_ATTEMPTS)
+        //     {
+        //         // printf("%s(): tx %08ld | abort by exceeded attempts\n", __FUNCTION__, handler->id);
+        //         return false;
+        //     }
+        // }
+        // handler_add_read(handler, &((char *)src)[i * region->alignment]);
     }
     return true;
 }
