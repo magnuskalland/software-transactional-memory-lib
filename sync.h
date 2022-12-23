@@ -13,7 +13,8 @@
 /* versioned lock */
 typedef atomic_ulong vlock;
 
-#define unlocked(vlock) (getlock(vlock) >> 63 == (uint64_t)0)
+#define locked(vlock) (getlock(vlock) >> 63 == (uint64_t)1)
+#define unlocked(vlock) (!locked(vlock))
 #define getlock(l) (l & ((uint64_t)1 << 63))
 #define getversion(v) (uint64_t)(v & (((uint64_t)1 << 63) - 1))
 

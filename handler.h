@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#include "linked_list.h"
 #include "array.h"
 
 #define INIT_WSET_SIZE 3
@@ -22,6 +21,7 @@ typedef struct write_entry
 
 typedef struct transaction_handler
 {
+    uint64_t id;
     bool is_ro;
     uint64_t timestamp;
     array *r_set;

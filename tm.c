@@ -45,7 +45,7 @@ static bool ro_read(region *region, handler *handler, void const *src, size_t si
 static bool rw_read(region *region, handler *handler, void const *src, size_t size, void *dest);
 static bool ro_validate(region *region, handler *handler);
 static segment *segment_create(uint16_t index, size_t size, size_t align);
-static bool tx_validate(region *region, handler *handler);
+static bool transaction_validate(region *region, handler *handler);
 static void flush_segment_ll(ll *ll);
 
 /** Create (i.e. allocate + init) a new shared memory region, with one first non-free-able allocated segment of the requested size and alignment.
@@ -55,7 +55,7 @@ static void flush_segment_ll(ll *ll);
  **/
 shared_t tm_create(size_t size, size_t align)
 {
-    if (unlikely(align & (align - 1) && align)) // is align a the power of 2
+    if (unlikely(align & (align - 1) && align)) // is align in the power of 2
     {
         fprintf(stderr, "align %ld not a power of 2\n", align);
         return invalid_shared;
@@ -72,7 +72,6 @@ shared_t tm_create(size_t size, size_t align)
     }
 
     struct memory_region *region;
-    segment *segment;
 
     region = malloc(sizeof(struct memory_region));
     if (unlikely(!region))
@@ -110,14 +109,13 @@ shared_t tm_create(size_t size, size_t align)
         traceerror();
         return invalid_shared;
     }
-    segment = segment_create(0, size, align);
+    region->segments[0] = segment_create(0, size, align);
     if (!region->freed_list)
     {
         traceerror();
         return invalid_shared;
     }
-    ll_tail_push(region->alloced_list, segment);
-    region->segments[0] = segment;
+    ll_tail_push(region->alloced_list, region->segments[0]);
     return region;
 }
 
@@ -179,10 +177,12 @@ tx_t tm_begin(shared_t shared, bool is_ro)
         return invalid_tx;
     }
 
+    handler->id = atomic_fetch_add(&((region *)shared)->next_handler, 1);
     handler->is_ro = is_ro;
     handler->timestamp = atomic_load(&((struct memory_region *)shared)->clock);
     handler->r_set = array_init_size(INIT_RSET_SIZE);
     handler->w_set = array_init_size(INIT_WSET_SIZE);
+
     return (tx_t)handler;
 }
 
@@ -199,7 +199,7 @@ bool tm_end(shared_t shared, tx_t tx)
         return true;
     }
 
-    bool commit = tx_validate((struct memory_region *)shared, (struct transaction_handler *)tx);
+    bool commit = transaction_validate((struct memory_region *)shared, (struct transaction_handler *)tx);
     handler_reset((struct transaction_handler *)tx, false);
     return commit;
 }
@@ -225,7 +225,6 @@ bool tm_read(shared_t shared, tx_t tx, void const *source, size_t size, void *ta
         success = rw_read((struct memory_region *)shared, (struct transaction_handler *)tx,
                           source, size, target);
     }
-
     if (!success)
     {
         handler_reset((struct transaction_handler *)tx, true);
@@ -292,12 +291,13 @@ alloc_t tm_alloc(shared_t shared, tx_t unused(tx), size_t size, void **target)
 
     if (unlikely(!bounded_spinlock_acquire(&region->segment_lock)))
     {
-        free((void *)segment->vaddr_base);
+        free(segment->vaddr);
+        free(segment);
         return abort_alloc;
     }
 
     /* free marked segments before allocating new */
-    // flush_segment_ll(region->freed_list);
+    flush_segment_ll(region->freed_list);
 
     ll_tail_push(region->alloced_list, segment);
     region->segments[segment_index] = segment;
@@ -320,7 +320,6 @@ alloc_t tm_alloc(shared_t shared, tx_t unused(tx), size_t size, void **target)
  **/
 bool tm_free(shared_t shared, tx_t unused(tx), void *target)
 {
-    return true;
     struct memory_region *region;
     segment *segment;
 
@@ -342,43 +341,49 @@ bool tm_free(shared_t shared, tx_t unused(tx), void *target)
     {
         traceerror();
     }
+
     return true;
 }
 
-inline bool ro_read(region *region, handler *handler, void const *src, size_t size, void *dest)
+bool ro_read(region *region, handler *handler, void const *src, size_t size, void *dest)
 {
     segment *segment;
-    void *srcva, *offset_src, *offset_dest;
-    uint64_t n_words, word_index, current_timestamp, retries = 0;
+    void *src_vaddr, *offset_src, *offset_dest;
+    uint64_t n_words, word_index, timestamp, attempts = 0;
 
     segment = region->segments[indexof(src)];
-    srcva = vaddrof(src, segment->vaddr_base);
+    src_vaddr = vaddrof(src, segment->vaddr_base);
 
     n_words = size / region->alignment;
     for (uint64_t i = 0; i < n_words; i++)
     {
-        offset_src = &(((char *)srcva)[i * region->alignment]);
+        offset_src = &(((char *)src_vaddr)[i * region->alignment]);
         offset_dest = &(((char *)dest)[i * region->alignment]);
+        memcpy(offset_dest, offset_src, region->alignment);
 
         word_index = (offset_src - segment->vaddr) / region->alignment;
 
-        memcpy(offset_dest, offset_src, region->alignment);
+        /* without ro optimization */
+        // if (!vlock_unlocked_old(&segment->vlocks[word_index], handler->timestamp))
+        // {
+        //     return false;
+        // }
 
         /* is the word currently being locked by a different transaction?    */
         /* has the word been updated since this transaction started?         */
         while (!vlock_unlocked_old(&segment->vlocks[word_index], handler->timestamp))
         {
-            current_timestamp = atomic_load(&region->clock);
+            timestamp = atomic_load(&region->clock);
             if (!ro_validate(region, handler))
             {
                 // printf("%s(): tx %08ld | abort by read set validation\n", __FUNCTION__, handler->id);
                 return false;
             }
-            handler->timestamp = current_timestamp;
+            handler->timestamp = timestamp;
             memcpy(offset_dest, offset_src, region->alignment);
-            if (retries++ == RO_VALIDATE_ATTEMPTS)
+            if (++attempts == RO_VALIDATE_ATTEMPTS)
             {
-                // printf("%s(): tx %08ld | abort by exceeded retries\n", __FUNCTION__, handler->id);
+                // printf("%s(): tx %08ld | abort by exceeded attempts\n", __FUNCTION__, handler->id);
                 return false;
             }
         }
@@ -387,7 +392,7 @@ inline bool ro_read(region *region, handler *handler, void const *src, size_t si
     return true;
 }
 
-inline bool rw_read(region *region, handler *handler, void const *src, size_t size, void *dest)
+bool rw_read(region *region, handler *handler, void const *src, size_t size, void *dest)
 {
     segment *segment;
     write_entry *write;
@@ -426,24 +431,22 @@ inline bool rw_read(region *region, handler *handler, void const *src, size_t si
     return true;
 }
 
-inline static bool ro_validate(region *region, handler *handler)
+static bool ro_validate(region *region, handler *handler)
 {
     segment *segment;
-    vlock *word_vlock;
     void *src;
     uint64_t vlock_timestamp, word_index;
-
     for (uint64_t i = 0; i < handler->r_set->size; i++)
     {
         src = arrayget(handler->r_set, i);
         segment = region->segments[indexof(src)];
-
         word_index = (vaddrof(src, segment->vaddr_base) - segment->vaddr) / region->alignment;
-        word_vlock = &segment->vlocks[word_index];
 
         /* if word is outdated */
-        vlock_timestamp = atomic_load(word_vlock);
-        if (getversion(vlock_timestamp) > handler->timestamp || !unlocked(vlock_timestamp))
+        vlock_timestamp = atomic_load(&segment->vlocks[word_index]);
+        /* locked bit is MSB and we therefore check for both version and if-locked */
+        /* if (word is newer than recorded timestamp) OR (word is locked) */
+        if (vlock_timestamp > handler->timestamp)
         {
             return false;
         }
@@ -451,7 +454,7 @@ inline static bool ro_validate(region *region, handler *handler)
     return true;
 }
 
-inline segment *segment_create(uint16_t index, size_t size, size_t align)
+segment *segment_create(uint16_t index, size_t size, size_t align)
 {
     segment *segment;
     segment = malloc(sizeof(struct memory_segment));
@@ -482,10 +485,11 @@ inline segment *segment_create(uint16_t index, size_t size, size_t align)
         traceerror();
         return NULL;
     }
+
     return segment;
 }
 
-inline void flush_segment_ll(ll *ll)
+void flush_segment_ll(ll *ll)
 {
     entry *e;
     while (ll_length(ll) > 0)
@@ -497,7 +501,7 @@ inline void flush_segment_ll(ll *ll)
     }
 }
 
-inline bool tx_validate(region *region, handler *handler)
+bool transaction_validate(region *region, handler *handler)
 {
     array *locked;
     segment *segment;
@@ -557,7 +561,7 @@ inline bool tx_validate(region *region, handler *handler)
             }
 
             /* if word is locked in validation of a different transaction */
-            if (!unlocked(vlock_timestamp) && !in_set(locked, word_vlock))
+            if (locked(vlock_timestamp) && !in_set(locked, word_vlock))
             {
                 // printf("%s(): tx %08ld | abort by read set validation (word %ld locked in different transaction)\n", __FUNCTION__, handler->id, word_index);
                 release_vlocks(locked);
